@@ -1,5 +1,6 @@
-// === IMPORTS ===
-const loader = new THREE.GLTFLoader();
+// === LOADERS ===
+const loadingManager = new THREE.LoadingManager();
+const loader = new THREE.GLTFLoader(loadingManager);
 
 // === SCENE ===
 const scene = new THREE.Scene();
@@ -88,34 +89,59 @@ window.addEventListener("keydown", (e) => {
 });
 
 // === ENTITIES ===
-const ships = [];
-const towers = [];
-const missiles = [];
-const interceptors = [];
+let ships = [];
+let towers = [];
+let missiles = [];
+let interceptors = [];
 
 // === GAME STATE ===
 let score = 0;
+let level = 1;
 let gameOver = false;
+let loadingComplete = false;
+let lastTime = 0;
 
 // === UI ===
 const statusEl = document.getElementById("status");
+const loadingEl = document.getElementById("loading");
 
 function updateUI(message) {
-  statusEl.textContent = `${message} | Escaped: ${score} | Active ships: ${ships.filter((s) => s.alive).length} | Incoming missiles: ${missiles.length}`;
+  statusEl.textContent = `${message} | Level: ${level} | Escaped: ${score} | Active ships: ${ships.filter((s) => s.alive).length} | Incoming missiles: ${missiles.length}`;
 }
 
 function updateHUD() {
-  if (gameOver) return;
+  if (gameOver || !loadingComplete) return;
 
-  statusEl.textContent = `Escaped: ${score} | Active ships: ${ships.filter((s) => s.alive).length} | Towers: ${towers.length} | Missiles: ${missiles.length} | Interceptors: ${interceptors.length}`;
+  statusEl.textContent = `Level: ${level} | Escaped: ${score} | Active ships: ${ships.filter((s) => s.alive).length} | Towers: ${towers.length} | Missiles: ${missiles.length} | Interceptors: ${interceptors.length}`;
 }
 
-// === LOADERS ===
-function loadShip(x) {
-  loader.load("assets/ship.glb", (gltf) => {
+function clearDynamicObjects() {
+  ships.forEach((ship) => {
+    if (ship.mesh.parent) {
+      scene.remove(ship.mesh);
+    }
+    world.removeBody(ship.body);
+  });
+
+  missiles.forEach((m) => {
+    if (m.mesh.parent) scene.remove(m.mesh);
+  });
+
+  interceptors.forEach((i) => {
+    if (i.mesh.parent) scene.remove(i.mesh);
+  });
+
+  ships = [];
+  missiles = [];
+  interceptors = [];
+}
+
+// === SPAWN ===
+function loadShip(x, z = -90) {
+  loader.load("./assets/ship.glb", (gltf) => {
     const model = gltf.scene;
     model.scale.set(2, 2, 2);
-    model.position.set(x, 0, -90);
+    model.position.set(x, 0, z);
     scene.add(model);
 
     const body = new CANNON.Body({
@@ -125,7 +151,7 @@ function loadShip(x) {
       angularDamping: 0.9,
     });
 
-    body.position.set(x, 0, -90);
+    body.position.set(x, 0, z);
     world.addBody(body);
 
     ships.push({ mesh: model, body, alive: true });
@@ -134,7 +160,7 @@ function loadShip(x) {
 }
 
 function loadIsland(x, z) {
-  loader.load("assets/island.glb", (gltf) => {
+  loader.load("./assets/island.glb", (gltf) => {
     const island = gltf.scene;
     island.scale.set(5, 5, 5);
     island.position.set(x, 0, z);
@@ -147,6 +173,29 @@ function loadIsland(x, z) {
 
     updateHUD();
   });
+}
+
+function spawnWave(shipCount = 5) {
+  const start = -Math.floor(shipCount / 2) * 10;
+  for (let i = 0; i < shipCount; i += 1) {
+    loadShip(start + i * 10);
+  }
+}
+
+function spawnTowers(count = 6) {
+  for (let i = 0; i < count; i += 1) {
+    loadIsland((Math.random() - 0.5) * 80, (Math.random() - 0.5) * 120);
+  }
+}
+
+function increaseDifficulty() {
+  level += 1;
+  score = 0;
+  clearDynamicObjects();
+  spawnTowers(6 + level);
+  spawnWave(4 + level);
+  gameOver = false;
+  updateUI(`Level ${level} started`);
 }
 
 // === PROJECTILES ===
@@ -162,6 +211,7 @@ function launchMissile(origin, target) {
     mesh,
     target,
     velocity: new THREE.Vector3(),
+    active: true,
   });
 }
 
@@ -175,22 +225,21 @@ function launchInterceptor(origin) {
 
   interceptors.push({
     mesh,
-    velocity: new THREE.Vector3(0, 0, -2),
+    velocity: new THREE.Vector3(0, 0, -120),
+    active: true,
   });
 }
 
 // === GAMEPLAY ===
-function updateShips() {
+function updateShips(deltaScale) {
   ships.forEach((s) => {
     if (!s.alive) return;
 
-    // Forward movement
-    s.body.velocity.z = 4;
+    s.body.velocity.z = 4 * deltaScale;
 
-    // Player lane steering
     if (targetPoint) {
       const dirX = targetPoint.x - s.body.position.x;
-      s.body.velocity.x = dirX * 0.5;
+      s.body.velocity.x = dirX * 0.5 * deltaScale;
     } else {
       s.body.velocity.x *= 0.9;
     }
@@ -222,16 +271,17 @@ function updateTowers() {
       if (target) {
         launchMissile(t.position, target);
       }
-      t.cooldown = 150 + Math.random() * 150;
+      t.cooldown = Math.max(60, 150 + Math.random() * 150 - level * 12);
     }
   });
 }
 
-function updateMissiles() {
+function updateMissiles(deltaScale) {
   for (let i = missiles.length - 1; i >= 0; i -= 1) {
     const missile = missiles[i];
 
-    if (!missile.target || !missile.target.alive) {
+    if (!missile.active || !missile.target || !missile.target.alive) {
+      missile.active = false;
       scene.remove(missile.mesh);
       missiles.splice(i, 1);
       continue;
@@ -241,13 +291,15 @@ function updateMissiles() {
       .subVectors(missile.target.mesh.position, missile.mesh.position)
       .normalize();
 
-    missile.velocity.add(dir.multiplyScalar(0.05));
+    missile.velocity.add(dir.multiplyScalar(0.05 * deltaScale));
     missile.mesh.position.add(missile.velocity);
 
     if (missile.mesh.position.distanceTo(missile.target.mesh.position) < 2) {
       missile.target.alive = false;
       scene.remove(missile.target.mesh);
       world.removeBody(missile.target.body);
+
+      missile.active = false;
       scene.remove(missile.mesh);
       missiles.splice(i, 1);
       updateUI("A convoy ship was destroyed ✖");
@@ -255,21 +307,25 @@ function updateMissiles() {
   }
 }
 
-function updateInterceptors() {
+function updateInterceptors(deltaScale) {
   for (let i = interceptors.length - 1; i >= 0; i -= 1) {
     const interceptor = interceptors[i];
-    interceptor.mesh.position.add(interceptor.velocity);
+    interceptor.mesh.position.addScaledVector(interceptor.velocity, deltaScale / 60);
 
     let removed = false;
 
     for (let m = missiles.length - 1; m >= 0; m -= 1) {
       const missile = missiles[m];
       if (missile.mesh.position.distanceTo(interceptor.mesh.position) < 2) {
+        missile.active = false;
         scene.remove(missile.mesh);
         missiles.splice(m, 1);
+
+        interceptor.active = false;
         scene.remove(interceptor.mesh);
         interceptors.splice(i, 1);
         removed = true;
+
         updateUI("Interceptor hit ✔");
         break;
       }
@@ -278,10 +334,17 @@ function updateInterceptors() {
     if (removed) continue;
 
     if (Math.abs(interceptor.mesh.position.z) > 180) {
+      interceptor.active = false;
       scene.remove(interceptor.mesh);
       interceptors.splice(i, 1);
     }
   }
+}
+
+function cleanupArrays() {
+  missiles = missiles.filter((m) => m.active && m.mesh.parent !== null);
+  interceptors = interceptors.filter((i) => i.active && i.mesh.parent !== null);
+  ships = ships.filter((s) => s.alive || s.mesh.parent !== null);
 }
 
 function checkGameState() {
@@ -294,29 +357,49 @@ function checkGameState() {
 
   if (score >= 3 && !gameOver) {
     gameOver = true;
-    updateUI("MISSION SUCCESS ✅ (Press R to restart)");
+    updateUI(`MISSION SUCCESS ✅ (Advancing to level ${level + 1}...)`);
+    setTimeout(() => {
+      increaseDifficulty();
+    }, 1500);
   }
 }
 
 // === INIT ===
-for (let i = -20; i <= 20; i += 10) {
-  loadShip(i);
+function initGame() {
+  spawnTowers(6);
+  spawnWave(5);
+  updateUI("Click ocean to set route | Space: fire interceptor | R: restart");
 }
 
-for (let i = 0; i < 6; i += 1) {
-  loadIsland((Math.random() - 0.5) * 80, (Math.random() - 0.5) * 120);
-}
+loadingManager.onLoad = () => {
+  loadingComplete = true;
+  if (loadingEl) loadingEl.style.display = "none";
+  if (!lastTime) {
+    requestAnimationFrame(animate);
+  }
+};
 
-updateUI("Click ocean to set route | Space: fire interceptor | R: restart");
+initGame();
 
 // === LOOP ===
 function animate(time) {
+  if (!lastTime) lastTime = time;
+  const delta = Math.min(0.05, (time - lastTime) / 1000);
+  const deltaScale = delta * 60;
+  lastTime = time;
+
   requestAnimationFrame(animate);
 
   const t = time * 0.001;
 
   animateOcean(t);
-  world.step(1 / 60);
+
+  if (!loadingComplete) {
+    renderer.render(scene, camera);
+    return;
+  }
+
+  world.step(1 / 60, delta, 3);
 
   if (!gameOver) {
     if (fireInterceptor) {
@@ -328,10 +411,11 @@ function animate(time) {
       fireInterceptor = false;
     }
 
-    updateShips();
+    updateShips(deltaScale);
     updateTowers();
-    updateMissiles();
-    updateInterceptors();
+    updateMissiles(deltaScale);
+    updateInterceptors(deltaScale);
+    cleanupArrays();
     checkGameState();
     updateHUD();
   }
@@ -344,5 +428,3 @@ window.addEventListener("resize", () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
-
-animate();

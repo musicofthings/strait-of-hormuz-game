@@ -41,6 +41,18 @@ body {
   opacity: 0.9;
 }
 
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  color: #dcecff;
+  letter-spacing: 0.04em;
+  font-size: 16px;
+  background: radial-gradient(circle at center, rgba(9, 23, 42, 0.85), rgba(4, 10, 18, 0.95));
+}
+
 canvas {
   display: block;
 }
