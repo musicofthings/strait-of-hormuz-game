@@ -1,6 +1,10 @@
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import * as CANNON from "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/+esm";
+
 // === LOADERS ===
 const loadingManager = new THREE.LoadingManager();
-const loader = new THREE.GLTFLoader(loadingManager);
+const loader = new GLTFLoader(loadingManager);
 
 // === SCENE ===
 const scene = new THREE.Scene();
@@ -15,8 +19,7 @@ camera.position.set(0, 60, 120);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.physicallyCorrectLights = true;
-renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 // LIGHTING
@@ -160,7 +163,7 @@ function loadShip(x, z = -90) {
 }
 
 function loadIsland(x, z) {
-  loader.load("./assets/island.glb", (gltf) => {
+  loader.load("./assets/Island.glb", (gltf) => {
     const island = gltf.scene;
     island.scale.set(5, 5, 5);
     island.position.set(x, 0, z);
@@ -377,6 +380,10 @@ loadingManager.onLoad = () => {
   if (!lastTime) {
     requestAnimationFrame(animate);
   }
+};
+
+loadingManager.onError = (url) => {
+  console.error("Failed to load asset:", url);
 };
 
 initGame();
