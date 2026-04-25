@@ -13,7 +13,9 @@ scene.fog = new THREE.Fog(0x87ceeb, 120, 420);
 
 // CAMERA
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
-camera.position.set(0, 60, 120);
+camera.position.set(0, 200, 0);
+camera.up.set(0, 0, -1);
+camera.lookAt(0, 0, 0);
 
 // RENDERER
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -30,7 +32,7 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
 // === PHYSICS WORLD ===
 const world = new CANNON.World();
-world.gravity.set(0, -9.82, 0);
+world.gravity.set(0, 0, 0);
 
 // === OCEAN ===
 const oceanGeo = new THREE.PlaneGeometry(500, 200, 200, 200);
@@ -103,6 +105,7 @@ let level = 1;
 let gameOver = false;
 let loadingComplete = false;
 let lastTime = 0;
+let pendingLoads = 0;
 
 // === UI ===
 const statusEl = document.getElementById("status");
@@ -120,9 +123,7 @@ function updateHUD() {
 
 function clearDynamicObjects() {
   ships.forEach((ship) => {
-    if (ship.mesh.parent) {
-      scene.remove(ship.mesh);
-    }
+    if (ship.mesh.parent) scene.remove(ship.mesh);
     world.removeBody(ship.body);
   });
 
@@ -134,16 +135,30 @@ function clearDynamicObjects() {
     if (i.mesh.parent) scene.remove(i.mesh);
   });
 
+  towers.forEach((t) => {
+    if (t.mesh && t.mesh.parent) scene.remove(t.mesh);
+  });
+
   ships = [];
   missiles = [];
   interceptors = [];
+  towers = [];
 }
 
 // === SPAWN ===
+function checkAllLoaded() {
+  if (pendingLoads === 0 && !loadingComplete) {
+    loadingComplete = true;
+    if (loadingEl) loadingEl.style.display = "none";
+    if (!lastTime) requestAnimationFrame(animate);
+  }
+}
+
 function loadShip(x, z = -90) {
+  pendingLoads += 1;
   loader.load("./assets/ship.glb", (gltf) => {
     const model = gltf.scene;
-    model.scale.set(2, 2, 2);
+    model.scale.set(20, 20, 20);
     model.position.set(x, 0, z);
     scene.add(model);
 
@@ -158,24 +173,42 @@ function loadShip(x, z = -90) {
     world.addBody(body);
 
     ships.push({ mesh: model, body, alive: true });
+    pendingLoads -= 1;
+    checkAllLoaded();
     updateHUD();
+  }, undefined, () => {
+    pendingLoads -= 1;
+    checkAllLoaded();
   });
 }
 
 function loadIsland(x, z) {
-  loader.load("./assets/Island.glb", (gltf) => {
-    const island = gltf.scene;
-    island.scale.set(5, 5, 5);
-    island.position.set(x, 0, z);
-    scene.add(island);
+  const group = new THREE.Group();
 
-    towers.push({
-      position: new THREE.Vector3(x, 0, z),
-      cooldown: 60 + Math.random() * 180,
-    });
+  const baseMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(8, 11, 4, 9),
+    new THREE.MeshLambertMaterial({ color: 0x9e845a })
+  );
+  baseMesh.position.y = 2;
+  group.add(baseMesh);
 
-    updateHUD();
+  const peakMesh = new THREE.Mesh(
+    new THREE.ConeGeometry(6, 14, 9),
+    new THREE.MeshLambertMaterial({ color: 0x7a6545 })
+  );
+  peakMesh.position.y = 11;
+  group.add(peakMesh);
+
+  group.position.set(x, 0, z);
+  scene.add(group);
+
+  towers.push({
+    mesh: group,
+    position: new THREE.Vector3(x, 0, z),
+    cooldown: 60 + Math.random() * 180,
   });
+
+  updateHUD();
 }
 
 function spawnWave(shipCount = 5) {
@@ -186,8 +219,13 @@ function spawnWave(shipCount = 5) {
 }
 
 function spawnTowers(count = 6) {
+  const half = Math.ceil(count / 2);
   for (let i = 0; i < count; i += 1) {
-    loadIsland((Math.random() - 0.5) * 80, (Math.random() - 0.5) * 120);
+    const side = i < half ? 1 : -1;
+    const idx = i < half ? i : i - half;
+    const x = side * (30 + Math.random() * 20);
+    const z = -75 + (idx / (half - 1 || 1)) * 120 + (Math.random() - 0.5) * 15;
+    loadIsland(x, z);
   }
 }
 
@@ -351,19 +389,19 @@ function cleanupArrays() {
 }
 
 function checkGameState() {
-  const aliveShips = ships.filter((s) => s.alive).length;
-
-  if (aliveShips === 0 && !gameOver) {
-    gameOver = true;
-    updateUI("MISSION FAILED ❌ (Press R to restart)");
-  }
-
   if (score >= 3 && !gameOver) {
     gameOver = true;
     updateUI(`MISSION SUCCESS ✅ (Advancing to level ${level + 1}...)`);
     setTimeout(() => {
       increaseDifficulty();
     }, 1500);
+    return;
+  }
+
+  const aliveShips = ships.filter((s) => s.alive).length;
+  if (aliveShips === 0 && ships.length > 0 && !gameOver) {
+    gameOver = true;
+    updateUI("MISSION FAILED ❌ (Press R to restart)");
   }
 }
 
@@ -373,14 +411,6 @@ function initGame() {
   spawnWave(5);
   updateUI("Click ocean to set route | Space: fire interceptor | R: restart");
 }
-
-loadingManager.onLoad = () => {
-  loadingComplete = true;
-  if (loadingEl) loadingEl.style.display = "none";
-  if (!lastTime) {
-    requestAnimationFrame(animate);
-  }
-};
 
 loadingManager.onError = (url) => {
   console.error("Failed to load asset:", url);
